@@ -16,12 +16,8 @@ pip install -r requirements.txt
 ```env
 # MongoDB 연결 URI
 MONGO_URI=mongodb://localhost:27017/alphatalk
-
-# 또는 MongoDB Atlas 사용 시:
-# MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/alphatalk?retryWrites=true&w=majority
-
 # CLOVA_API_KEY=your_clova_api_key_here
-# OPENAI_API_KEY=your_openai_api_key_here
+# DART_API_KEY=your_dart_api_key_here
 ```
 
 3. 서버 실행:
