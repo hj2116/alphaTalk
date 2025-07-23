@@ -166,10 +166,8 @@ def run_quant_analysis(ticker):
     return analysis_text
 
 def run_fundamental_analysis(ticker):
-    print(f"=== 펀더멘털 분석 수행 중: {ticker} ===")
     
     try:
-        # FundamentalAnalyzer 인스턴스 생성
         analyzer = FundamentalAnalyzer()
         
         # 종합 펀더멘털 분석 수행
@@ -249,7 +247,7 @@ def run_sub_agent(agent_prompt, user_prompt, ticker=None):
     
     enhanced_prompt = user_prompt
     
-    # Quant Agent의 경우 실시간 데이터 추가
+    # Quant Agent의 경우 실시간 계산된 데이터 추가
     if "quantitative analyst" in agent_prompt.lower() and ticker:
         real_time_data = run_quant_analysis(ticker)
         enhanced_prompt = f"{user_prompt}\n\n실시간 정량 데이터:\n{real_time_data}\n\n위 실시간 데이터를 바탕으로 정량적 분석을 수행해주세요."
@@ -321,3 +319,44 @@ if __name__ == "__main__":
         print(final_content)
     else:
         print("Could not generate the final report.")
+
+
+def kakao(ticker):
+    target_ticker = ticker
+    user_request = f"Analyze the stock: {target_ticker}"
+
+    # 1. Run specialized sub-agents
+    quant_report = run_sub_agent(QUANT_PROMPT, user_request, ticker=target_ticker)
+    fundamental_report = run_sub_agent(FUNDAMENTAL_PROMPT, user_request, ticker=target_ticker)
+    news_report = run_sub_agent(NEWS_PROMPT, user_request, ticker=target_ticker)
+    combined_report = f"""
+    Here are the reports from the specialized agents for {target_ticker}:
+
+    --- Quantitative Analysis ---
+    {quant_report}
+
+    --- Fundamental Analysis ---
+    {fundamental_report}
+
+    --- News Analysis ---
+    {news_report}
+
+    Please synthesize these reports and provide a final investment recommendation.
+    """
+
+    # 3. Run the final master agent
+    print("\n--- Running Master Investment Agent to Finalize Report ---")
+    final_messages = [
+        makeMessage("system", FINAL_PROMPT),
+        makeMessage("user", combined_report)
+    ]
+    
+    final_response = makeRequest(final_messages)
+
+    # 4. Print the final result
+    if final_response and final_response.get("result"):
+        final_content = final_response["result"]["message"]["content"]
+        return final_content
+    else:
+        return "Could not generate the final report."
+    
