@@ -14,6 +14,7 @@ load_dotenv()
 CLOVA_URL = "https://clovastudio.apigw.ntruss.com/testapp/v1" 
 CLOVA_API_KEY = os.getenv("CLOVA_API_KEY")
 
+
 # --- Prompts for Specialized Agents ---
 
 QUANT_PROMPT = """
@@ -184,26 +185,24 @@ def run_fundamental_analysis(ticker):
         print(error_msg)
         return error_msg
 
+
 def run_news_analysis(ticker):
     """RAG 기반 실시간 뉴스 분석을 수행합니다."""
     print(f"=== RAG 기반 뉴스 분석 수행 중: {ticker} ===")
-    
+
     try:
         # NewsAnalyzer 인스턴스 생성
         analyzer = NewsAnalyzer()
         
-        # 회사명 가져오기
-        try:
-            stock = yf.Ticker(ticker)
-            company_name = stock.info.get('longName', ticker)
-        except:
-            company_name = ticker
+        # 회사명 가져오기 (새로운 NewsAnalyzer는 자동으로 처리)
+        # try:
+        #     stock = yf.Ticker(ticker)
+        #     company_name = stock.info.get('longName', ticker)
+        # except:
+        #     company_name = ticker
         
-        # 종합 뉴스 분석 수행
-        analysis_result = analyzer.comprehensive_news_analysis(ticker, company_name)
-        
-        # 보고서 포맷팅
-        formatted_report = analyzer.format_news_report(analysis_result)
+        # 뉴스 분석 수행 (새로운 방식)
+        formatted_report = analyzer.analyze_news(ticker)
         
         print("RAG 기반 뉴스 분석 완료")
         return formatted_report
@@ -298,7 +297,7 @@ if __name__ == "__main__":
     --- News Analysis ---
     {news_report}
 
-    Please synthesize these reports and provide a final investment recommendation.
+    Please synthesize these reports and provide a final investment recommendation as a top tier investment advisor.
     """
 
     # 3. Run the final master agent

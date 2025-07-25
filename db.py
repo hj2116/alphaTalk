@@ -14,22 +14,52 @@ db = client.alphatalk
 
 # 컬렉션
 analyses_collection = db.analyses
+users_collection = db.users
+
+class TickersDb:
+    @staticmethod
+    async def add_ticker(ticker: str):
+        try:
+            if ticker in await TickersDb.get_all_tickers():
+                return False
+            await db.companies_list.insert_one({"ticker": ticker})
+            return True
+        except Exception as e:
+            print(f"종목 추가 오류: {e}")
+            return False
+    
+    @staticmethod
+    async def get_all_tickers():
+        try:
+            cursor = db.companies_list.find({})
+            tickers = []
+            async for doc in cursor:
+                tickers.append(doc["ticker"])
+            return tickers
+        except Exception as e:
+            print(f"모든 종목 조회 오류: {e}")
+            return []
+    @staticmethod
+    async def remove_ticker(ticker: str):
+        try:
+            await db.companies_list.delete_one({"ticker": ticker})
+            return True
+        except Exception as e:
+            print(f"종목 제거 오류: {e}")
+            return False
+    
 class UserDB:
     @staticmethod
     async def add_user_ticker(user_id: str, ticker: str):
-        """사용자의 관심 종목 추가"""
         try:
             ticker = ticker.upper()
             
-            # 사용자 문서 조회 또는 생성
             user_doc = await db.users.find_one({"user_id": user_id})
             
             if user_doc:
-                # 이미 있는 티커인지 확인
                 if ticker in user_doc.get("tickers", []):
-                    return False  # 이미 존재함
+                    return False  
                 
-                # 티커 추가
                 await db.users.update_one(
                     {"user_id": user_id},
                     {
@@ -38,7 +68,6 @@ class UserDB:
                     }
                 )
             else:
-                # 새 사용자 문서 생성
                 await db.users.insert_one({
                     "user_id": user_id,
                     "tickers": [ticker],
@@ -65,7 +94,6 @@ class UserDB:
     
     @staticmethod
     async def remove_user_ticker(user_id: str, ticker: str):
-        """사용자의 관심 종목 제거"""
         try:
             ticker = ticker.upper()
             
@@ -83,8 +111,7 @@ class UserDB:
             return False
     
     @staticmethod
-    async def get_ticker_users(ticker: str):
-        """특정 종목을 관심 종목으로 등록한 사용자들 조회"""
+    async def get_ticker_users(ticker: str): # 특정 종목을 관심 종목으로 등록한 사용자들 조회 필요한진 아직 모름
         try:
             ticker = ticker.upper()
             cursor = db.users.find({"tickers": ticker})
@@ -98,7 +125,6 @@ class UserDB:
     
     @staticmethod
     async def get_all_users_count():
-        """전체 사용자 수 조회"""
         try:
             count = await db.users.count_documents({})
             return count
@@ -108,7 +134,6 @@ class UserDB:
     
     @staticmethod
     async def get_user_info(user_id: str):
-        """사용자 정보 조회 (전체 문서)"""
         try:
             user_doc = await db.users.find_one({"user_id": user_id})
             return user_doc
@@ -131,7 +156,6 @@ class AnalysisDB:
                 "error": analysis_data.get("error", None)
             }
             
-            # 기존 분석이 있으면 업데이트, 없으면 삽입
             await analyses_collection.update_one(
                 {"ticker": ticker.upper()},
                 {"$set": document},

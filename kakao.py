@@ -14,7 +14,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 # backend 모듈을 import하기 위해 경로 추가
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import AnalysisDB, UserDB, test_connection, analyses_collection, tickersDb, db
+from db import AnalysisDB, UserDB, test_connection, analyses_collection, TickersDb, db
 
 app = FastAPI()
 
@@ -33,7 +33,7 @@ async def get_all_unique_tickers():
             all_tickers.update(user_tickers)
         
         # companies_list에서도 티커 수집 (별도로 관리되는 티커가 있을 수 있음)
-        companies_tickers = await tickersDb.get_all_tickers()
+        companies_tickers = await TickersDb.get_all_tickers()
         all_tickers.update(companies_tickers)
         
         unique_tickers = list(all_tickers)

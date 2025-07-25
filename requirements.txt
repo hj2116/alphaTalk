@@ -6,3 +6,14 @@ yfinance
 openai
 requests
 python-dotenv
+apscheduler
+transformers
+torch
+newspaper3k
+beautifulsoup4
+pandas
+numpy
+feedparser
+asyncpraw
+nest-asyncio
+apscheduler

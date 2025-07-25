@@ -1,6 +1,10 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import requests
+from bs4 import BeautifulSoup
+import re
+from datetime import datetime, timedelta
 
 class QuantTools:
     def __init__(self):
@@ -76,5 +80,9 @@ class QuantTools:
             return {"error": str(e)}
     
 def get_daily_candles(ticker, nDays):
+    # 한국 주식 코드 (6자리 숫자)인 경우 .KS 접미사 추가
+    if re.match(r'^\d{6}$', ticker):
+        ticker = f"{ticker}.KS"
+    
     data = yf.Ticker(ticker).history(period=f"{nDays}d")
     return data
