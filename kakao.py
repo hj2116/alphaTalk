@@ -834,4 +834,4 @@ async def get_user_info_endpoint(request: Request):
         }
 
 if __name__ == '__main__':
-    uvicorn.run('kakao:app', port=8000, reload=True)
+    uvicorn.run('kakao:app', port=8000, reload=True, host='0.0.0.0')
