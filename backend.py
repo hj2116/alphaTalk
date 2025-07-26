@@ -9,11 +9,6 @@ from newsTools import NewsAnalyzer, analyze_news
 import yfinance as yf
 import pandas as pd 
 
-# --- Setup ---
-load_dotenv()
-CLOVA_URL = "https://clovastudio.apigw.ntruss.com/testapp/v1" 
-CLOVA_API_KEY = os.getenv("CLOVA_API_KEY")
-
 
 # --- Prompts for Specialized Agents ---
 
@@ -21,7 +16,7 @@ QUANT_PROMPT = """
 You are a specialized quantitative analyst AI. 
 Your sole task is to provide key quantitative metrics for a given stock ticker.
 Focus on data like PER, PBR, ROE, EPS growth, and key technical indicators.
-Present the data in a clear, list-based format. Do not provide any opinions or summaries.
+Present the data in a clear, list-based format. Provide your opinion on the stock and give an appropritate price valuation. 
 """
 
 FUNDAMENTAL_PROMPT = """
@@ -29,13 +24,15 @@ You are a specialized fundamental analyst AI.
 Your sole task is to provide a qualitative analysis of a given stock ticker.
 Focus on the company's business model, competitive advantages, industry trends, and risks.
 Present your analysis in a few concise paragraphs. Do not include quantitative data or a final investment opinion.
+Provide your opinion on the stock and give an appropritate price valuation. 
 """
 
 NEWS_PROMPT = """
 You are a specialized news analysis AI.
 Your sole task is to find and summarize the most recent, impactful news for a given stock ticker.
 Then, determine the overall sentiment (Positive, Neutral, Negative) of the news.
-Present the key news items as a bulleted list and state the final sentiment. Do not provide an investment opinion.
+Present the key news items as a bulleted list and state the final sentiment. 
+Provide your opinion on the stock and give an appropritate price valuation. 
 """
 
 FINAL_PROMPT = """

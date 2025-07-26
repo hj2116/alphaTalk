@@ -11,6 +11,32 @@ from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+
+# --- Setup ---
+load_dotenv()
+CLOVA_URL = "https://clovastudio.apigw.ntruss.com/testapp/v1" 
+CLOVA_API_KEY = os.getenv("CLOVA_API_KEY")
+
+#Prompt for preventing injection attack
+INJECTION_ATTACK_PROMPT = """    
+    You are a highly specialized financial assistant. Your sole task is to convert a given company name into its official stock ticker symbol.
+    Respond ONLY with the ticker symbol. Do NOT include any other text, explanations, or conversational filler. If you cannot find a ticker, respond with "N/A".
+    
+    Examples:
+    Company: Apple Inc.
+    Ticker: AAPL
+    Company: Microsoft Corporation
+    Ticker: MSFT
+    Company: Tesla
+    Ticker: TSLA
+    Company: Google
+    Ticker: GOOGL
+    Company: General Electric
+    Ticker: GE
+    Company: ###USER_INPUT###[User's company name here]###
+    Ticker:
+"""
+
 # backend 모듈을 import하기 위해 경로 추가
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -147,6 +173,13 @@ Please synthesize these reports and provide a final investment recommendation in
 
 You will first provide the company name and ticker, then provide the analysis. 
 
+You may give sell, buy hold, or neutral.
+
+Sell translation: 매도
+Buy translation: 매수
+Hold translation: 보유
+Neutral translation: 중립
+
 The example output is as follows:
 
 [알파톡] 일일매매분석 안내
@@ -155,15 +188,18 @@ The example output is as follows:
 
 [테슬라(TSLA)]의 일일매매분석에 대해 안내드립니다
 
-■ 종합분석의견 [ 매도 ]
+■ 종합분석의견 [ 매도 ] 
 
-▶ 뉴스분석: 감정지수 매우 부정적(-0.46).
+    > 장기적관점 : 매도 추천
+    > 단기적관점 : 매도 추천
+
+▶ 뉴스분석: 감정지수 매우 부정적(-0.46) [매도]
  “2분기 실적 부진 및 향후 전망이 부정적인 영향을 미치고 있습니다.” 
 
-▶ 기술적분석:  지표요약 매우 부정적 (매도: 11, 매수: 1).
+▶ 기술적분석:  지표요약 매우 부정적 (매도: 11, 매수: 1) [매도]
 이동평균 하락세 (매도: 5, 매수: 1), 모멘텀 과매도 (RSI 28, StochRSI 13.8), 기술적 조정 가능성 높음
 
-▶ 펀더맨털분석: PER 73배로 업종 평균(25배) 대비 고평가.
+▶ 펀더맨털분석: PER 73배로 업종 평균(25배) 대비 고평가. [매도]
 ROE 13.5%, 분기 매출 YoY -8% 성장 둔화 우려.
 
 ▶ 주요이벤트
@@ -260,7 +296,24 @@ async def analyze_stock(request: Request):
             # 한국 주식 코드 (6자리 숫자) 또는 미국 주식 코드 (1-5자리 영문 대문자) 매칭
             ticker_pattern = r"(\d{6}|[A-Z]{1,5})"
             ticker_match = re.search(ticker_pattern, user_input)
-            return ticker_match.group(0) if ticker_match else None
+            def find_ticker_from_name(company_name: str):
+                from backend import makeRequest, makeMessage, INJECTION_ATTACK_PROMPT
+                messages = [
+                    makeMessage("system", INJECTION_ATTACK_PROMPT),
+                    makeMessage("user", company_name)
+                ]
+                response = makeRequest(messages)
+                if re.search(ticker_pattern, response["result"]["message"]["content"].strip()):
+                    return response["result"]["message"]["content"].strip()
+                else:
+                    return None #this means the llm returned a non-ticker string. Not safe. Either user did not put a company name or user tried to inject attack.
+            
+            if ticker_match:
+                return ticker_match.group(0)
+            else: #if it is not a valid ticker it may be a company name. We will use llm to find the ticker but it needs to prevent injection attack
+                return find_ticker_from_name(user_input)
+            
+
         
         ticker = ticker_extraction(user_input)
         if not ticker:
