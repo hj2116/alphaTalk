@@ -5,6 +5,7 @@ import os
 import queue as q
 import threading
 import time
+from dotenv import load_dotenv
 import re
 import asyncio
 from datetime import datetime, timezone, timedelta
