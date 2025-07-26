@@ -318,11 +318,6 @@ async def analyze_stock(request: Request):
                         "label": "다른 종목 추가",
                         "action": "message", 
                         "messageText": "다른 종목 추가하기"
-                    },
-                    {
-                        "label": f"{ticker} 상세분석",
-                        "action": "message",
-                        "messageText": f"{ticker} 상세분석"
                     }
                 ]
             }
