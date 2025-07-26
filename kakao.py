@@ -161,7 +161,7 @@ The example output is as follows:
  “2분기 실적 부진 및 향후 전망이 부정적인 영향을 미치고 있습니다.” 
 
 ▶ 기술적분석:  지표요약 매우 부정적 (매도: 11, 매수: 1).
-이동평균 하락세 (매도: 5, 매수: 1), 모멘텀 과매도 (RSI 28, StochRSI 13.8)
+이동평균 하락세 (매도: 5, 매수: 1), 모멘텀 과매도 (RSI 28, StochRSI 13.8), 기술적 조정 가능성 높음
 
 ▶ 펀더맨털분석: PER 73배로 업종 평균(25배) 대비 고평가.
 ROE 13.5%, 분기 매출 YoY -8% 성장 둔화 우려.
@@ -215,8 +215,9 @@ async def get_message(request: Request):
     output = ""
     for ticker in tickers:
         analysis_data = await AnalysisDB.get_analysis(ticker, max_age_hours=24)
-        if analysis_data:
-            output += f"{ticker} 분석 결과: {analysis_data['final']}\n\n"
+        if analysis_data['final'].strip() != "":
+            output += f"{ticker} 분석 결과: {analysis_data['final']}"
+            output += "--------------------------------\n\n"
         else:
             output += f"{ticker} 분석 결과가 아직 준비되지 않았습니다.\n\n"
 
@@ -316,7 +317,7 @@ async def analyze_stock(request: Request):
                     {
                         "label": "다른 종목 추가",
                         "action": "message", 
-                        "messageText": "다른 종목을 추가해주세요"
+                        "messageText": "다른 종목 추가하기"
                     },
                     {
                         "label": f"{ticker} 상세분석",
@@ -350,7 +351,20 @@ async def get_detailed_analysis(ticker: str, request: Request):
         analysis_data = await AnalysisDB.get_analysis(ticker, max_age_hours=24)
         
         if analysis_data:
-            if analysis_data.get("error"):
+            if analysis_data['final'].strip() == "":
+                return {
+                    "version": "2.0",
+                    "template": {
+                        "outputs": [
+                            {
+                                "simpleText": {
+                                    "text": f" {ticker} 분석이 아직 진행 중입니다.\n\n잠시 후 다시 시도해주세요.\n\n또는 '{ticker}'를 입력하여 새로운 분석을 시작하세요."
+                                }
+                            }
+                        ]
+                    }
+                }
+            elif analysis_data.get("error"):
                 return {
                     "version": "2.0",
                     "template": {
@@ -695,15 +709,15 @@ async def get_my_tickers(request: Request):
             for ticker in user_tickers:
                 analysis_data = await AnalysisDB.get_analysis(ticker, max_age_hours=24)
                 if analysis_data and not analysis_data.get("error"):
-                    status = "✅ 분석완료"
+                    status = "분석완료"
                 elif analysis_data and analysis_data.get("error"):
-                    status = "❌ 분석오류"
+                    status = "분석오류"
                 else:
-                    status = "⏳ 분석대기"
+                    status = "분석대기"
                 ticker_status.append(f"• {ticker} {status}")
             
             message = f"""
-📊 내 관심 종목 ({len(user_tickers)}개)
+내 관심 종목 ({len(user_tickers)}개)
 
 {chr(10).join(ticker_status)}
 
@@ -711,7 +725,7 @@ async def get_my_tickers(request: Request):
             """
         else:
             message = """
-📊 등록된 관심 종목이 없습니다.
+등록된 관심 종목이 없습니다.
 
 종목 코드를 입력하여 관심 종목을 추가해보세요!
 예: AAPL, TSLA, NVDA, 삼성전자 등
@@ -777,18 +791,18 @@ async def get_user_info_endpoint(request: Request):
             updated_str = updated_at.strftime("%Y-%m-%d %H:%M") if updated_at else "알 수 없음"
             
             message = f"""
-👤 내 계정 정보
+내 계정 정보
 
-📊 관심 종목: {len(tickers)}개
-📅 가입일: {created_str}
-🔄 최근 업데이트: {updated_str}
+관심 종목: {len(tickers)}개
+가입일: {created_str}
+최근 업데이트: {updated_str}
 
 📋 관심 종목 목록:
 {chr(10).join([f"• {ticker}" for ticker in tickers]) if tickers else "• 없음"}
             """
         else:
             message = """
-👤 새로운 사용자입니다!
+새로운 사용자입니다!
 
 관심 종목을 추가하여 시작해보세요.
 예: AAPL, TSLA, NVDA 등
