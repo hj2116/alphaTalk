@@ -343,11 +343,56 @@ async def analyze_stock(request: Request):
         }
 
 
-@app.post("/detail/{ticker}")
-async def get_detailed_analysis(ticker: str, request: Request):
+@app.post("/detail")
+async def get_detailed_analysis(request: Request):
     """상세 분석 결과 조회"""
     try:
         # 데이터베이스에서 분석 결과 확인 (24시간 이내)
+        request_body = await request.json()
+        ticker = request_body.get("userRequest", {}).get("utterance", "")
+        if ticker == "":
+            return {
+                "version": "2.0",
+                "template": {
+                    "outputs": [
+                        {
+                            "simpleText": { 
+                                "text": "종목 코드를 입력해주세요. 예: 006800, AAPL, TSLA, NVDA 등"
+                            }
+                        }
+                    ]
+                }
+            }
+        else:
+            ticker = ticker[0:6]#also need to check if it is a valid ticker
+            ticker = ''.join(filter(lambda x: x.isdigit() or (x.isalpha() and x.isupper()), ticker))
+            if len(ticker) != 6:
+                return {
+                    "version": "2.0",
+                    "template": {
+                        "outputs": [
+                            {
+                                "simpleText": {     
+                                    "text": "종목 코드를 입력해주세요. 예: 006800, AAPL, TSLA, NVDA 등"
+                                }
+                            }
+                        ]
+                    }
+                }
+        if ticker not in await get_all_unique_tickers():
+            return {
+                "version": "2.0",
+                "template": {
+                    "outputs": [
+                        {
+                            "simpleText": {     
+                                "text": f"'{ticker}'는 관심 종목에 등록되지 않았습니다. 관심 종목에 등록하여 상세 분석을 시작하세요."
+                            }
+                        }
+                    ]
+                }
+            }
+    
         analysis_data = await AnalysisDB.get_analysis(ticker, max_age_hours=24)
         
         if analysis_data:
