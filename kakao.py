@@ -240,6 +240,161 @@ ROE 13.5%, 분기 매출 YoY -8% 성장 둔화 우려.
         error_data = {"error": str(e)}
         await AnalysisDB.save_analysis(ticker, error_data)
 
+async def process_company_name_callback(user_input: str, user_id: str, callback_url: str):
+    """백그라운드에서 회사명을 티커로 변환하고 콜백 응답 전송"""
+    try:
+        import requests
+        
+        def find_ticker_from_name(company_name: str):
+            from backend import makeRequest, makeMessage   
+            
+            # Enhanced security check for injection attempts
+            dangerous_keywords = ['hack', 'inject', 'ignore', 'system', 'admin', 'delete', 'drop', 'select', 'insert', 'update']
+            if any(keyword in company_name.lower() for keyword in dangerous_keywords):
+                print(f"🚨 보안: 위험한 입력 차단 - {company_name}")
+                return None
+            
+            # Use LLM to convert company name to ticker
+            messages = [
+                makeMessage("system", INJECTION_ATTACK_PROMPT),
+                makeMessage("user", company_name)
+            ]
+            response = makeRequest(messages)
+            
+            if response and response.get("result"):
+                result = response["result"]["message"]["content"].strip().upper()
+                print(f"🤖 LLM 응답: {result}")
+                
+                # Validate that the LLM returned a proper ticker format
+                korean_ticker_pattern = r'^\d{6}$'
+                us_ticker_pattern = r'^[A-Z]{1,5}$'
+                if re.match(korean_ticker_pattern, result) or re.match(us_ticker_pattern, result):
+                    return result
+            
+            return None  # Invalid response or no valid ticker found
+        
+        print(f"🔄 콜백 처리 시작: {user_input} (사용자: {user_id})")
+        
+        # Convert company name to ticker using LLM
+        ticker = find_ticker_from_name(user_input)
+        
+        if not ticker:
+            # Failed to find ticker - send error response
+            callback_response = {
+                "version": "2.0",
+                "template": {
+                    "outputs": [
+                        {
+                            "simpleText": {
+                                "text": f"❌ '{user_input}'에 해당하는 종목을 찾을 수 없어요.\n\n정확한 종목 코드를 입력해주세요.\n예: AAPL, TSLA, 005930, 035420 등"
+                            }
+                        }
+                    ],
+                    "quickReplies": [
+                        {
+                            "label": "다시 시도",
+                            "action": "message",
+                            "messageText": "종목 추가하기"
+                        }
+                    ]
+                }
+            }
+        else:
+            # Successfully found ticker - add to user's watchlist
+            added = await UserDB.add_user_ticker(user_id, ticker)
+            
+            if added:
+                status_message = f"{ticker}를 관심 종목에 추가했습니다!\n\n 매일 오전 10시에 분석 결과를 전송합니다."
+                print(f" 종목 추가 성공: {user_input} → {ticker}")
+            else:
+                status_message = f"{ticker}는 이미 관심 종목으로 등록되어 있어요!"
+                print(f" 이미 등록된 종목: {ticker}")
+            
+            # Start background analysis if needed
+            unique_tickers = await get_all_unique_tickers()
+            if ticker not in unique_tickers:
+                asyncio.create_task(run_full_analysis_background(ticker))
+                print(f" 백그라운드 분석 시작: {ticker}")
+            else:
+                analysis_data = await AnalysisDB.get_analysis(ticker, max_age_hours=12)
+                if not analysis_data:
+                    asyncio.create_task(run_full_analysis_background(ticker))
+                    print(f" 분석 업데이트 시작: {ticker}")
+            
+            callback_response = {
+                "version": "2.0",
+                "template": {
+                    "outputs": [
+                        {
+                            "simpleText": {
+                                "text": status_message
+                            }
+                        }
+                    ],
+                    "quickReplies": [
+                        {
+                            "label": "내 관심종목",
+                            "action": "message",
+                            "messageText": "내 관심종목"
+                        },
+                        {
+                            "label": "다른 종목 추가",
+                            "action": "message", 
+                            "messageText": "다른 종목 추가하기"
+                        },
+                        {
+                            "label": f"{ticker} 상세분석",
+                            "action": "message",
+                            "messageText": f"{ticker} 상세분석"
+                        }
+                    ]
+                }
+            }
+        
+        # Send callback response
+        callback_headers = {
+            "Content-Type": "application/json"
+        }
+        
+        callback_request = requests.post(
+            callback_url, 
+            json=callback_response, 
+            headers=callback_headers,
+            timeout=10
+        )
+        
+        if callback_request.status_code == 200:
+            print(f" 콜백 응답 전송 성공: {ticker}")
+        else:
+            print(f" 콜백 응답 전송 실패: {callback_request.status_code}")
+            
+    except Exception as e:
+        print(f" 콜백 처리 오류: {e}")
+        
+        # Send error callback response
+        try:
+            error_response = {
+                "version": "2.0",
+                "template": {
+                    "outputs": [
+                        {
+                            "simpleText": {
+                                "text": f" 처리 중 오류가 발생했습니다.\n\n다시 시도해주세요.\n\n오류: {str(e)}"
+                            }
+                        }
+                    ]
+                }       
+            }
+            
+            requests.post(
+                callback_url, 
+                json=error_response, 
+                headers={"Content-Type": "application/json"},
+                timeout=5
+            )
+        except:
+            pass  # Ignore callback send errors
+
 @app.get("/")
 async def root(request: Request):
     return {"message": "AlphaTalk AI Investment Analysis API"}
@@ -293,89 +448,184 @@ async def analyze_stock(request: Request):
     try:
         request_body = await request.json()
         user_input = request_body.get("userRequest", {}).get("utterance", "")
-        def ticker_extraction(user_input: str):
-            # 한국 주식 코드 (6자리 숫자) 또는 미국 주식 코드 (1-5자리 영문 대문자) 매칭
-            ticker_pattern = r"(\d{6}|[A-Z]{1,5})"
-            ticker_match = re.search(ticker_pattern, user_input)
-            def find_ticker_from_name(company_name: str):
-                from backend import makeRequest, makeMessage, INJECTION_ATTACK_PROMPT
-                messages = [
-                    makeMessage("system", INJECTION_ATTACK_PROMPT),
-                    makeMessage("user", company_name)
-                ]
-                response = makeRequest(messages)
-                if re.search(ticker_pattern, response["result"]["message"]["content"].strip()):
-                    return response["result"]["message"]["content"].strip()
-                else:
-                    return None #this means the llm returned a non-ticker string. Not safe. Either user did not put a company name or user tried to inject attack.
-            
-            if ticker_match:
-                return ticker_match.group(0)
-            else: #if it is not a valid ticker it may be a company name. We will use llm to find the ticker but it needs to prevent injection attack
-                return find_ticker_from_name(user_input)
-            
-
-        
-        ticker = ticker_extraction(user_input)
-        if not ticker:
-            return {
-                "version": "2.0",
-                "template": {
-                    "outputs": [
-                        {
-                            "simpleText": {
-                                "text": "종목 코드를 입력해주세요. 예: 006800, AAPL, TSLA, NVDA 등"
-                            }
-                        }
-                    ]
-                }
-            }
-        
         user_id = request_body.get("userRequest", {}).get("user", {}).get("id", "unknown")
+        callback_url = request_body.get("userRequest", {}).get("callbackUrl")
         
-        added = await UserDB.add_user_ticker(user_id, ticker)
+        def ticker_extraction(user_input: str):
+            # More precise ticker patterns - match whole words only
+            korean_ticker_pattern = r'^\d{6}$'  # Exactly 6 digits, whole string
+            us_ticker_pattern = r'^[A-Z]{1,5}$'  # 1-5 uppercase letters, whole string
+            
+            # Clean and normalize input
+            cleaned_input = user_input.strip().upper()
+            
+            # Check if the entire input matches a valid ticker format
+            if re.match(korean_ticker_pattern, cleaned_input):
+                return cleaned_input
+            if re.match(us_ticker_pattern, cleaned_input):
+                return cleaned_input
+            
+            # If not a direct ticker format, return None to trigger callback processing
+            return None
         
-        if added:
-            status_message = f"{ticker}를 관심 종목에 추가했습니다! 매일 오전 10시에 분석 결과를 전송합니다."
-        else:
-            status_message = f"{ticker}는 이미 관심 종목입니다."
+        # First, check if it's already a valid ticker format
+        ticker = ticker_extraction(user_input)
         
-        # 백그라운드에서 분석 시작  
-        import asyncio
-        
-        if ticker not in await get_all_unique_tickers():
-            asyncio.create_task(run_full_analysis_background(ticker))
-        else: #means it is already in the database but we still need to check if it is updated
-            analysis_data = await AnalysisDB.get_analysis(ticker, max_age_hours=12)
-            if analysis_data:
-                print(f"{ticker} 분석 결과가 업데이트되었습니다.")
+        if ticker:
+            # Direct ticker input - check if callback is available for analysis
+            if callback_url:
+                # Use callback for analysis execution
+                asyncio.create_task(process_ticker_analysis_callback(ticker, user_id, callback_url))
+                
+                return {
+                    "version": "2.0",
+                    "useCallback": True,
+                    "data": {
+                        "text": f"{ticker} 종목을 추가하고 분석을 시작해요!\n\n 분석에 약 1분 정도 소요됩니다. 잠시만 기다려주세요!"
+                    }
+                }
             else:
-                asyncio.create_task(run_full_analysis_background(ticker))
+                # Immediate response without callback
+                added = await UserDB.add_user_ticker(user_id, ticker)
+                
+                if added:
+                    status_message = f"{ticker}를 관심 종목에 추가했습니다! 매일 오전 10시에 분석 결과를 전송합니다."
+                else:
+                    status_message = f"{ticker}는 이미 관심 종목입니다."
+                
+                # 백그라운드에서 분석 시작  
+                unique_tickers = await get_all_unique_tickers()
+                if ticker not in unique_tickers:
+                    asyncio.create_task(run_full_analysis_background(ticker))
+                else:
+                    analysis_data = await AnalysisDB.get_analysis(ticker, max_age_hours=12)
+                    if not analysis_data:
+                        asyncio.create_task(run_full_analysis_background(ticker))
 
-        return {
-            "version": "2.0",
-            "template": {
-                "outputs": [
-                    {
-                        "simpleText": {
-                            "text": status_message.strip()
+                return {
+                    "version": "2.0",
+                    "template": {
+                        "outputs": [
+                            {
+                                "simpleText": {
+                                    "text": status_message.strip()
+                                }
+                            }
+                        ],
+                        "quickReplies": [
+                            {
+                                "label": "내 관심종목",
+                                "action": "message",
+                                "messageText": "내 관심종목"
+                            },
+                            {
+                                "label": "다른 종목 추가",
+                                "action": "message", 
+                                "messageText": "다른 종목 추가하기"
+                            }
+                        ]
+                    }
+                }
+        
+        else:
+            # Company name input - use callback for LLM processing
+            if callback_url:
+                # Process company name to ticker conversion in background
+                asyncio.create_task(process_company_name_callback(user_input, user_id, callback_url))
+                
+                # Return immediate callback response
+                return {
+                    "version": "2.0",
+                    "useCallback": True,
+                    "data": {
+                        "text": "회사명을 분석하고 있어요!\n\n 5초 정도 소요될 예정입니다. 잠시만 기다려주세요!"
+                    }
+                }
+            else:
+                # Fallback for non-callback environment (same as before)
+                def find_ticker_from_name(company_name: str):
+                    from backend import makeRequest, makeMessage   
+                    
+                    # Enhanced security check for injection attempts
+                    dangerous_keywords = ['hack', 'inject', 'ignore', 'system', 'admin', 'delete', 'drop', 'select', 'insert', 'update']
+                    if any(keyword in company_name.lower() for keyword in dangerous_keywords):
+                        return None
+                    
+                    # Use LLM to convert company name to ticker
+                    messages = [
+                        makeMessage("system", INJECTION_ATTACK_PROMPT),
+                        makeMessage("user", company_name)
+                    ]
+                    response = makeRequest(messages)
+                    
+                    if response and response.get("result"):
+                        result = response["result"]["message"]["content"].strip().upper()
+                        print(result)
+                        # Validate that the LLM returned a proper ticker format
+                        korean_ticker_pattern = r'^\d{6}$'
+                        us_ticker_pattern = r'^[A-Z]{1,5}$'
+                        if re.match(korean_ticker_pattern, result) or re.match(us_ticker_pattern, result):
+                            return result
+                    
+                    return None  # Invalid response or no valid ticker found
+                
+                ticker = find_ticker_from_name(user_input)
+                
+                if not ticker:
+                    return {
+                        "version": "2.0",
+                        "template": {
+                            "outputs": [
+                                {
+                                    "simpleText": {
+                                        "text": "종목 코드를 입력해주세요. 예: 006800, AAPL, TSLA, NVDA 등"
+                                    }
+                                }
+                            ]
                         }
                     }
-                ],
-                "quickReplies": [
-                    {
-                        "label": "내 관심종목",
-                        "action": "message",
-                        "messageText": "내 관심종목"
-                    },
-                    {
-                        "label": "다른 종목 추가",
-                        "action": "message", 
-                        "messageText": "다른 종목 추가하기"
+                
+                # Process the found ticker
+                added = await UserDB.add_user_ticker(user_id, ticker)
+                
+                if added:
+                    status_message = f"{ticker}를 관심 종목에 추가했습니다! 매일 오전 10시에 분석 결과를 전송합니다."
+                else:
+                    status_message = f"{ticker}는 이미 관심 종목입니다."
+                
+                # 백그라운드에서 분석 시작  
+                unique_tickers = await get_all_unique_tickers()
+                if ticker not in unique_tickers:
+                    asyncio.create_task(run_full_analysis_background(ticker))
+                else:
+                    analysis_data = await AnalysisDB.get_analysis(ticker, max_age_hours=12)
+                    if not analysis_data:
+                        asyncio.create_task(run_full_analysis_background(ticker))
+
+                return {
+                    "version": "2.0",
+                    "template": {
+                        "outputs": [
+                            {
+                                "simpleText": {
+                                    "text": status_message.strip()
+                                }
+                            }
+                        ],
+                        "quickReplies": [
+                            {
+                                "label": "내 관심종목",
+                                "action": "message",
+                                "messageText": "내 관심종목"
+                            },
+                            {
+                                "label": "다른 종목 추가",
+                                "action": "message", 
+                                "messageText": "다른 종목 추가하기"
+                            }
+                        ]
                     }
-                ]
-            }
-        }
+                }
         
     except Exception as e:
         return {
@@ -384,13 +634,165 @@ async def analyze_stock(request: Request):
                 "outputs": [
                     {
                         "simpleText": {
-                            "text": f"{ticker} 추가 중 오류가 발생했습니다.\n\n오류 내용: {str(e)}\n\n다른 종목 코드로 다시 시도해주세요."
+                            "text": f"오류가 발생했습니다.\n\n{str(e)}\n\n다시 시도해주세요."
                         }
                     }
                 ]
             }
         }
 
+
+async def process_ticker_analysis_callback(ticker: str, user_id: str, callback_url: str):
+    """백그라운드에서 티커 분석을 수행하고 콜백 응답 전송"""
+    try:
+        import requests
+        
+        print(f" 티커 분석 콜백 시작: {ticker} (사용자: {user_id})")
+        
+        # Add ticker to user's watchlist
+        added = await UserDB.add_user_ticker(user_id, ticker)
+        
+        if added:
+            print(f"종목 추가 성공: {ticker}")
+        else:
+            print(f"이미 등록된 종목: {ticker}")
+        
+        # Check if analysis is needed
+        unique_tickers = await get_all_unique_tickers()
+        analysis_needed = False
+        
+        if ticker not in unique_tickers:
+            analysis_needed = True
+            print(f"새로운 종목 - 전체 분석 시작: {ticker}")
+        else:
+            analysis_data = await AnalysisDB.get_analysis(ticker, max_age_hours=12)
+            if not analysis_data or analysis_data.get('final', '').strip() == '':
+                analysis_needed = True
+                print(f"분석 업데이트 필요: {ticker}")
+        
+        # Perform analysis if needed
+        if analysis_needed:
+            await run_full_analysis_background(ticker)
+            
+        # Get the latest analysis
+        final_analysis = await AnalysisDB.get_analysis(ticker, max_age_hours=24)
+        
+        if final_analysis and final_analysis.get('final') and final_analysis['final'].strip():
+            # Analysis completed successfully
+            if added:
+                status_message = f"{ticker}를 관심 종목에 추가하고 분석을 완료했어요!\n\n 최신 AI 분석 결과:\n\n{final_analysis['final']}"
+            else:
+                status_message = f"{ticker} 최신 AI 분석 결과:\n\n{final_analysis['final']}"
+            
+            callback_response = {
+                "version": "2.0",
+                "template": {
+                    "outputs": [
+                        {
+                            "simpleText": {
+                                "text": status_message
+                            }
+                        }
+                    ],
+                    "quickReplies": [
+                        {
+                            "label": "퀀트 분석",
+                            "action": "message",
+                            "messageText": f"{ticker} 퀀트분석"
+                        },
+                        {
+                            "label": "펀더멘털",
+                            "action": "message",
+                            "messageText": f"{ticker} 펀더멘털"
+                        },
+                        {
+                            "label": "뉴스 분석",
+                            "action": "message",
+                            "messageText": f"{ticker} 뉴스분석"
+                        },
+                        {
+                            "label": "내 관심종목",
+                            "action": "message",
+                            "messageText": "내 관심종목"
+                        }
+                    ]
+                }
+            }
+        else:
+            # Analysis failed or incomplete
+            if added:
+                status_message = f"{ticker}를 관심 종목에 추가했어요!\n\n 분석이 진행 중입니다. 잠시 후 다시 확인해주세요."
+            else:
+                status_message = f"{ticker} 분석이 진행 중입니다. 잠시 후 다시 확인해주세요."
+            
+            callback_response = {
+                "version": "2.0",
+                "template": {
+                    "outputs": [
+                        {
+                            "simpleText": {
+                                "text": status_message
+                            }
+                        }
+                    ],
+                    "quickReplies": [
+                        {
+                            "label": "내 관심종목",
+                            "action": "message",
+                            "messageText": "내 관심종목"
+                        },
+                        {
+                            "label": "다른 종목 추가",
+                            "action": "message", 
+                            "messageText": "다른 종목 추가하기"
+                        }
+                    ]
+                }
+            }
+        
+        # Send callback response
+        callback_headers = {
+            "Content-Type": "application/json"
+        }
+        
+        callback_request = requests.post(
+            callback_url, 
+            json=callback_response, 
+            headers=callback_headers,
+            timeout=15
+        )
+        
+        if callback_request.status_code == 200:
+            print(f"✅ 티커 분석 콜백 응답 전송 성공: {ticker}")
+        else:
+            print(f"❌ 티커 분석 콜백 응답 전송 실패: {callback_request.status_code}")
+            
+    except Exception as e:
+        print(f"❌ 티커 분석 콜백 처리 오류: {e}")
+        
+        # Send error callback response
+        try:
+            error_response = {
+                "version": "2.0",
+                "template": {
+                    "outputs": [
+                        {
+                            "simpleText": {
+                                "text": f"❌ {ticker} 분석 중 오류가 발생했습니다.\n\n다시 시도해주세요.\n\n오류: {str(e)}"
+                            }
+                        }
+                    ]
+                }
+            }
+            
+            requests.post(
+                callback_url, 
+                json=error_response, 
+                headers={"Content-Type": "application/json"},
+                timeout=5
+            )
+        except:
+            pass  # Ignore callback send errors
 
 @app.post("/detail")
 async def get_detailed_analysis(request: Request):
@@ -602,7 +1004,7 @@ async def get_fundamental_analysis(ticker: str, request: Request):
                     "outputs": [
                         {
                             "simpleText": {
-                                "text": f"⏰ {ticker} 펀더멘털 분석 결과가 아직 준비되지 않았습니다.\n\n'{ticker}'를 입력하여 새로운 분석을 시작하세요."
+                                "text": f" {ticker} 펀더멘털 분석 결과가 아직 준비되지 않았습니다.\n\n'{ticker}'를 입력하여 새로운 분석을 시작하세요."
                             }
                         }
                     ]
@@ -648,7 +1050,7 @@ async def get_news_analysis(ticker: str, request: Request):
                     "outputs": [
                         {
                             "simpleText": {
-                                "text": f"⏰ {ticker} 뉴스 분석 결과가 아직 준비되지 않았습니다.\n\n'{ticker}'를 입력하여 새로운 분석을 시작하세요."
+                                "text": f" {ticker} 뉴스 분석 결과가 아직 준비되지 않았습니다.\n\n'{ticker}'를 입력하여 새로운 분석을 시작하세요."
                             }
                         }
                     ]
@@ -679,7 +1081,7 @@ async def cleanup_old_analyses(request: Request):
                 "outputs": [
                     {
                         "simpleText": {
-                            "text": f"🧹 데이터베이스 정리 완료\n\n삭제된 오래된 분석 결과: {deleted_count}개"
+                                "text": f" 데이터베이스 정리 완료\n\n삭제된 오래된 분석 결과: {deleted_count}개"
                         }
                     }
                 ]

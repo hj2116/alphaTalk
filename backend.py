@@ -8,7 +8,9 @@ from fundamentalTools import FundamentalAnalyzer, analyze_fundamental
 from newsTools import NewsAnalyzer, analyze_news
 import yfinance as yf
 import pandas as pd 
-
+load_dotenv()
+CLOVA_URL = "https://clovastudio.apigw.ntruss.com/testapp/v1" 
+CLOVA_API_KEY = os.getenv("CLOVA_API_KEY")
 
 # --- Prompts for Specialized Agents ---
 
