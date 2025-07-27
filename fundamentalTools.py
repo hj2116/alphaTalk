@@ -27,7 +27,7 @@ class FundamentalAnalyzer:
         네이버 금융에서 종목코드(code)에 해당하는 기업의
         1) 연간 및 분기 재무제표
         2) 동일업종 비교 지표
-        를 불러오는 함수
+        를 불러오는 함수 (개선된 버전)
         """
         try:
             URL = f"https://finance.naver.com/item/main.nhn?code={code}"
@@ -38,36 +38,59 @@ class FundamentalAnalyzer:
                 return None, None, None, {"error": f"HTTP {r.status_code}"}
             
             tables = pd.read_html(r.text)
+            print(f"📊 총 {len(tables)}개 테이블 발견")
             
             annual_data, quarter_data, industry_df = None, None, None
             
+            # 재무제표 데이터 추출 (보통 4번째 테이블)
             try:
-                for i in range(3, min(7, len(tables))):
+                for table_idx in [4, 5, 3]:  # 여러 인덱스 시도
                     try:
-                        finance_df = tables[i]
-                        if len(finance_df.columns) >= 3 and '최근 연간 실적' in str(finance_df.columns):
+                        finance_df = tables[table_idx]
+                        
+                        # 재무제표인지 확인
+                        if '최근 연간 실적' in str(finance_df.columns) or '최근 분기 실적' in str(finance_df.columns):
                             finance_df.set_index(finance_df.columns[0], inplace=True)
                             finance_df.index.rename('주요재무정보', inplace=True)
                             
+                            # Multi-level 컬럼 처리
                             if finance_df.columns.nlevels > 1:
                                 finance_df.columns = finance_df.columns.droplevel(-1)
                             
-                            annual_data = finance_df.xs('최근 연간 실적', axis=1) if '최근 연간 실적' in finance_df.columns else None
-                            quarter_data = finance_df.xs('최근 분기 실적', axis=1) if '최근 분기 실적' in finance_df.columns else None
+                            # 연간 실적 추출
+                            if '최근 연간 실적' in finance_df.columns:
+                                annual_data = finance_df.xs('최근 연간 실적', axis=1)
+                                print("✅ 연간 실적 데이터 추출 성공")
+                            
+                            # 분기 실적 추출
+                            if '최근 분기 실적' in finance_df.columns:
+                                quarter_data = finance_df.xs('최근 분기 실적', axis=1)
+                                print("✅ 분기 실적 데이터 추출 성공")
+                            
                             break
+                            
                     except Exception as e:
                         continue
                         
             except Exception as e:
                 print(f"재무제표 데이터를 불러오는 중 오류 발생: {e}")
             
+            # 동일업종 비교 데이터 추출 (보통 5번째 또는 6번째 테이블)
             try:
-                for i in range(4, min(8, len(tables))):
+                for table_idx in [5, 6, 7]:
                     try:
-                        industry_df = tables[i]
-                        if len(industry_df.columns) >= 2 and any('업종' in str(col) for col in industry_df.columns):
+                        test_df = tables[table_idx]
+                        
+                        # 업종 비교 테이블 확인 (종목명이 있고 여러 회사 비교)
+                        if ('종목명' in test_df.columns or 
+                            len(test_df.columns) > 3 and 
+                            any('*' in str(col) for col in test_df.columns)):  # 종목코드 패턴
+                            
+                            industry_df = test_df.copy()
                             industry_df.set_index(industry_df.columns[0], inplace=True)
+                            print("✅ 동일업종 비교 데이터 추출 성공")
                             break
+                            
                     except Exception as e:
                         continue
                         
