@@ -296,14 +296,238 @@ class FundamentalAnalyzer:
             return {"error": str(e)}
     
     def calculate_financial_ratios(self, ticker):
-        """통합 재무비율 계산 (네이버 + yfinance)"""
-        result = self.analyze_naver_financial_ratios(ticker)
+        """Enhanced multi-source financial ratios calculation with comprehensive fallbacks"""
+        print(f"🔄 Starting multi-source fundamental analysis for {ticker}")
         
-        if "error" in result:
-            print(f"네이버 데이터 실패, yfinance로 전환: {result['error']}")
-            return self.calculate_financial_ratios_yfinance(ticker)
+        # Initialize result structure
+        result = {
+            "source": "multi-source",
+            "financial_metrics": {},
+            "data_sources_used": [],
+            "missing_metrics": [],
+            "data_quality_score": 0
+        }
+        
+        # Define critical metrics we need
+        critical_metrics = [
+            'revenue', 'net_income', 'market_cap', 'pe_ratio', 'pb_ratio', 
+            'roe', 'roa', 'debt_ratio', 'current_ratio'
+        ]
+        
+        # Step 1: Try Naver Finance for Korean stocks
+        is_korean_stock = self.extract_korean_code(ticker) is not None
+        naver_data = None
+        
+        if is_korean_stock:
+            print(f"📊 Attempting Naver Finance data for Korean stock: {ticker}")
+            naver_result = self.analyze_naver_financial_ratios(ticker)
+            
+            if "error" not in naver_result:
+                naver_data = naver_result
+                result["data_sources_used"].append("naver_finance")
+                
+                # Extract metrics from Naver data
+                if "financial_metrics" in naver_data:
+                    for metric, value in naver_data["financial_metrics"].items():
+                        if value is not None and value != 0 and value != "N/A":
+                            result["financial_metrics"][metric] = value
+                            
+                print(f"✅ Naver Finance: Retrieved {len(result['financial_metrics'])} metrics")
+            else:
+                print(f"❌ Naver Finance failed: {naver_result.get('error', 'Unknown error')}")
+        
+        # Step 2: Try yfinance for missing metrics or as primary source for non-Korean stocks
+        print(f"📈 Attempting yfinance data for {ticker}")
+        yfinance_result = self.calculate_financial_ratios_yfinance(ticker)
+        
+        if "error" not in yfinance_result:
+            result["data_sources_used"].append("yfinance")
+            
+            # Fill missing metrics from yfinance
+            yf_metrics_added = 0
+            for metric, value in yfinance_result.items():
+                if metric not in ['source'] and (metric not in result["financial_metrics"] or 
+                                                result["financial_metrics"].get(metric) in [None, 0, "N/A"]):
+                    if value is not None and value != 0 and value != "N/A":
+                        result["financial_metrics"][metric] = value
+                        yf_metrics_added += 1
+                        
+            print(f"✅ yfinance: Added {yf_metrics_added} additional metrics")
+        else:
+            print(f"❌ yfinance failed: {yfinance_result.get('error', 'Unknown error')}")
+        
+        # Step 3: Try additional fallback sources for critical missing metrics
+        missing_critical = [metric for metric in critical_metrics 
+                          if metric not in result["financial_metrics"] or 
+                          result["financial_metrics"][metric] in [None, 0, "N/A"]]
+        
+        if missing_critical:
+            print(f"⚠️ Missing critical metrics: {missing_critical}")
+            
+            # Try alternative yfinance info extraction
+            fallback_data = self.get_yfinance_alternative_metrics(ticker, missing_critical)
+            if fallback_data:
+                result["data_sources_used"].append("yfinance_alternative")
+                for metric, value in fallback_data.items():
+                    if value is not None and value != 0:
+                        result["financial_metrics"][metric] = value
+                        missing_critical.remove(metric) if metric in missing_critical else None
+                        
+                print(f"✅ Alternative yfinance: Filled {len(fallback_data)} missing metrics")
+        
+        # Step 4: DART API fallback for Korean stocks (if still missing data)
+        if is_korean_stock and missing_critical and self.dart_api_key:
+            print(f"🏢 Attempting DART API for remaining metrics: {missing_critical}")
+            dart_data = self.get_dart_fallback_metrics(ticker, missing_critical)
+            if dart_data:
+                result["data_sources_used"].append("dart_api")
+                for metric, value in dart_data.items():
+                    if value is not None and value != 0:
+                        result["financial_metrics"][metric] = value
+                        missing_critical.remove(metric) if metric in missing_critical else None
+                        
+                print(f"✅ DART API: Filled {len(dart_data)} missing metrics")
+        
+        # Step 5: Calculate data quality score and final validation
+        result["missing_metrics"] = missing_critical
+        filled_metrics = len([m for m in critical_metrics if m in result["financial_metrics"] 
+                            and result["financial_metrics"][m] not in [None, 0, "N/A"]])
+        result["data_quality_score"] = (filled_metrics / len(critical_metrics)) * 100
+        
+        # Add metadata
+        result["analysis_timestamp"] = datetime.now().isoformat()
+        result["total_metrics_retrieved"] = len(result["financial_metrics"])
+        
+        print(f"📈 Analysis complete: {filled_metrics}/{len(critical_metrics)} critical metrics filled")
+        print(f"📊 Data quality score: {result['data_quality_score']:.1f}%")
+        print(f"🔗 Sources used: {', '.join(result['data_sources_used'])}")
+        
+        # Return enhanced result or error if no data could be retrieved
+        if not result["financial_metrics"] or result["data_quality_score"] < 20:
+            return {
+                "error": f"Insufficient fundamental data retrieved. Quality score: {result['data_quality_score']:.1f}%",
+                "attempted_sources": result["data_sources_used"],
+                "missing_metrics": missing_critical
+            }
         
         return result
+
+    def get_yfinance_alternative_metrics(self, ticker, missing_metrics):
+        """Alternative yfinance data extraction for missing metrics"""
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            
+            alternative_data = {}
+            
+            for metric in missing_metrics:
+                if metric == 'revenue' and 'totalRevenue' in info:
+                    alternative_data['revenue'] = info['totalRevenue']
+                elif metric == 'net_income' and 'netIncomeToCommon' in info:
+                    alternative_data['net_income'] = info['netIncomeToCommon']
+                elif metric == 'market_cap' and 'marketCap' in info:
+                    alternative_data['market_cap'] = info['marketCap']
+                elif metric == 'pe_ratio':
+                    # Try multiple PE ratio fields
+                    pe_fields = ['trailingPE', 'forwardPE', 'priceToEarningsTrailing12Months']
+                    for field in pe_fields:
+                        if field in info and info[field] is not None:
+                            alternative_data['pe_ratio'] = info[field]
+                            break
+                elif metric == 'pb_ratio' and 'priceToBook' in info:
+                    alternative_data['pb_ratio'] = info['priceToBook']
+                elif metric == 'roe' and 'returnOnEquity' in info:
+                    alternative_data['roe'] = info['returnOnEquity'] * 100  # Convert to percentage
+                elif metric == 'roa' and 'returnOnAssets' in info:
+                    alternative_data['roa'] = info['returnOnAssets'] * 100  # Convert to percentage
+                elif metric == 'debt_ratio' and 'debtToEquity' in info:
+                    alternative_data['debt_ratio'] = info['debtToEquity']
+                elif metric == 'current_ratio' and 'currentRatio' in info:
+                    alternative_data['current_ratio'] = info['currentRatio'] * 100  # Convert to percentage
+            
+            return alternative_data
+            
+        except Exception as e:
+            print(f"❌ Alternative yfinance extraction failed: {e}")
+            return {}
+
+    def get_dart_fallback_metrics(self, ticker, missing_metrics):
+        """DART API fallback for Korean stocks missing metrics"""
+        try:
+            if not self.dart_api_key:
+                return {}
+            
+            code = self.extract_korean_code(ticker)
+            if not code:
+                return {}
+            
+            # Get corporation code first
+            corp_code = self.get_corp_code_from_dart(code)
+            if not corp_code:
+                return {}
+            
+            # Get financial statements
+            financial_data = self.get_dart_financial_statements(corp_code)
+            if not financial_data:
+                return {}
+            
+            # Extract missing metrics from DART data
+            dart_metrics = {}
+            
+            # This is a simplified implementation - in production, you'd need to parse
+            # the complex DART financial statement structure
+            if 'revenue' in missing_metrics and 'sales' in financial_data:
+                dart_metrics['revenue'] = financial_data['sales']
+            
+            if 'net_income' in missing_metrics and 'net_income' in financial_data:
+                dart_metrics['net_income'] = financial_data['net_income']
+            
+            # Add more DART metric mappings as needed...
+            
+            return dart_metrics
+            
+        except Exception as e:
+            print(f"❌ DART API fallback failed: {e}")
+            return {}
+
+    def get_corp_code_from_dart(self, stock_code):
+        """Get corporation code from DART API using stock code"""
+        try:
+            url = "https://opendart.fss.or.kr/api/corpCode.xml"
+            params = {'crtfc_key': self.dart_api_key}
+            
+            response = requests.get(url, params=params)
+            if response.status_code == 200:
+                # Parse XML response to find corp_code for given stock_code
+                # This is simplified - actual implementation would parse XML
+                # and map stock codes to corporation codes
+                return None  # Placeholder
+            return None
+            
+        except Exception as e:
+            print(f"❌ DART corp code lookup failed: {e}")
+            return None
+
+    def get_dart_financial_statements(self, corp_code):
+        """Get financial statements from DART API"""
+        try:
+            url = "https://opendart.fss.or.kr/api/fnlttSinglAcnt.json"
+            params = {
+                'crtfc_key': self.dart_api_key,
+                'corp_code': corp_code,
+                'bsns_year': datetime.now().year - 1,  # Previous year
+                'reprt_code': '11011'  # Annual report
+            }
+            
+            response = requests.get(url, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('list', [])
+            return []
+            
+        except Exception as e:
+            print(f"❌ DART financial statements failed: {e}")
+            return []
     
     def analyze_earnings_surprise(self, ticker):
         """어닝 서프라이즈 분석"""
@@ -427,134 +651,168 @@ class FundamentalAnalyzer:
         interest = analysis_data.get('interest_rate_analysis', {})
         calendar = analysis_data.get('earnings_calendar', {})
         
-        data_source = ratios.get('source', 'unknown')
-        is_naver_data = data_source == 'naver_finance'
-        
+        # Handle both old and new data structures
+        if ratios.get('source') == 'multi-source':
+            # New multi-source structure
+            metrics = ratios.get('financial_metrics', {})
+            data_sources = ratios.get('data_sources_used', [])
+            data_quality = ratios.get('data_quality_score', 0)
+            missing_metrics = ratios.get('missing_metrics', []) 
+            
+            source_display = ' + '.join([
+                'Naver' if 'naver_finance' in data_sources else '',
+                'Yahoo Finance' if 'yfinance' in data_sources else '',
+                'DART' if 'dart_api' in data_sources else '',
+                'Alternative' if 'yfinance_alternative' in data_sources else ''
+            ]).strip(' + ')
+            
+        else:
+            # Legacy single-source structure
+            if ratios.get('source') == 'naver_finance':
+                metrics = ratios.get('financial_metrics', {})
+                source_display = 'Naver Finance'
+                data_quality = 85  # Assume good quality for legacy
+            else:
+                metrics = ratios  # Direct metrics in old yfinance structure
+                source_display = 'Yahoo Finance'
+                data_quality = 75  # Assume decent quality for legacy
+
         report = f"""
 === {ticker} 종합 펀더멘털 분석 보고서 ===
-데이터 출처: {'네이버 금융' if is_naver_data else 'Yahoo Finance'}
+데이터 출처: {source_display}
+데이터 품질: {data_quality:.1f}% ({'매우 우수' if data_quality >= 90 else '우수' if data_quality >= 75 else '보통' if data_quality >= 50 else '주의 필요'})
 
 ## 1. 핵심 재무지표"""
         
-        if is_naver_data:
-            metrics = ratios.get('financial_metrics', {})
-            report += f"""
-- 매출액: {self.format_currency(metrics.get('revenue', 0))}
-- 영업이익: {self.format_currency(metrics.get('operating_income', 0))}
-- 당기순이익: {self.format_currency(metrics.get('net_income', 0))}
-- 시가총액: {self.format_currency(metrics.get('market_cap', 0))}
+        # Format financial metrics consistently
+        revenue = metrics.get('revenue', 0)
+        net_income = metrics.get('net_income', 0)
+        total_assets = metrics.get('total_assets', 0)
+        shareholders_equity = metrics.get('shareholders_equity', 0)
+        market_cap = metrics.get('market_cap', 0)
+        
+        report += f"""
+- 매출액: {self.format_currency(revenue)}
+- 순이익: {self.format_currency(net_income)}
+- 총자산: {self.format_currency(total_assets)}
+- 자기자본: {self.format_currency(shareholders_equity)}"""
+
+        report += f"""
 
 ## 2. 수익성 지표
 - ROA (총자산이익률): {metrics.get('roa', 'N/A')}%
 - ROE (자기자본이익률): {metrics.get('roe', 'N/A')}%
-- 부채비율: {metrics.get('debt_ratio', 'N/A')}%
-- 유동비율: {metrics.get('current_ratio', 'N/A')}%
+- Gross Margin (매출총이익률): {metrics.get('gross_margin', 'N/A')}%
+- Asset Growth (자산성장률): {metrics.get('asset_growth', 'N/A')}%
 
 ## 3. 밸류에이션
+- 시가총액: {self.format_currency(market_cap)}
 - PER (주가수익비율): {metrics.get('pe_ratio', 'N/A')}
 - PBR (주가순자산비율): {metrics.get('pb_ratio', 'N/A')}"""
-            
-            # 업종 비교 데이터
-            industry_comp = ratios.get('industry_comparison', {})
-            if industry_comp:
-                report += f"""
 
-## 4. 동일업종 비교"""
-                for metric, data in industry_comp.items():
-                    if isinstance(data, dict):
-                        report += f"""
-- {metric}: 회사 {data.get('company', 'N/A')} vs 업종평균 {data.get('industry_avg', 'N/A')}"""
-        else:
-            # yfinance 데이터 포맷 (기존 방식)
-            report += f"""
-- 매출액: {self.format_currency(ratios.get('revenue', 0))}
-- 순이익: {self.format_currency(ratios.get('net_income', 0))}
-- 총자산: {self.format_currency(ratios.get('total_assets', 0))}
-- 자기자본: {self.format_currency(ratios.get('shareholders_equity', 0))}
-
-## 2. 수익성 지표
-- ROA (총자산이익률): {ratios.get('roa', 'N/A')}%
-- ROE (자기자본이익률): {ratios.get('roe', 'N/A')}%
-- Gross Margin (매출총이익률): {ratios.get('gross_margin', 'N/A')}%
-- Asset Growth (자산성장률): {ratios.get('asset_growth', 'N/A')}%
-
-## 3. 밸류에이션
-- 시가총액: {self.format_currency(ratios.get('market_cap', 0))}
-- PER (주가수익비율): {ratios.get('pe_ratio', 'N/A')}
-- PBR (주가순자산비율): {ratios.get('pb_ratio', 'N/A')}"""
+        # Add debt and liquidity ratios for enhanced data
+        debt_ratio = metrics.get('debt_ratio', 0)
+        current_ratio = metrics.get('current_ratio', 0)
         
-        # 공통 섹션들
+        if debt_ratio or current_ratio:
+            report += f"""
+
+## 4. 재무 건전성
+- 부채비율: {debt_ratio}%
+- 유동비율: {current_ratio}%"""
+            section_num = 5
+        else:
+            section_num = 4
+
+        # Earnings momentum analysis
         report += f"""
 
-## {'5' if is_naver_data and ratios.get('industry_comparison') else '4'}. 실적 모멘텀 분석
+## {section_num}. 실적 모멘텀 분석
 - Fundamental Momentum: {earnings.get('momentum_description', 'N/A')}
 - 최근 분기 실적 추이: {"개선" if earnings.get('fundamental_momentum', False) else "둔화"}
 
-## {'6' if is_naver_data and ratios.get('industry_comparison') else '5'}. 금리 민감도 분석
+## {section_num + 1}. 금리 민감도 분석
 - 부채비율: {interest.get('debt_to_equity', 'N/A')}%
 - 섹터: {interest.get('sector', 'N/A')}
 - {interest.get('analysis', 'N/A')}
 
-## {'7' if is_naver_data and ratios.get('industry_comparison') else '6'}. 실적발표 일정
-- 다음 실적발표일: {calendar.get('next_earnings_date', 'N/A')}
+## {section_num + 2}. 실적발표 일정
+- 다음 실적발표일: {calendar.get('next_earnings_date', 'N/A')}"""
 
-## {'8' if is_naver_data and ratios.get('industry_comparison') else '7'}. 종합 평가
+        # Data quality and missing metrics information
+        if ratios.get('source') == 'multi-source':
+            missing_count = len(missing_metrics) if missing_metrics else 0
+            if missing_count > 0:
+                report += f"""
+
+## {section_num + 3}. 데이터 품질 정보
+- 수집된 핵심 지표: {9 - missing_count}/9개
+- 부족한 지표: {', '.join(missing_metrics) if missing_metrics else '없음'}
+- 사용된 데이터 소스: {len(data_sources)}개"""
+
+        # Comprehensive scoring
+        report += f"""
+
+## {section_num + 4 if ratios.get('source') == 'multi-source' and missing_metrics else section_num + 3}. 종합 평가
 """
         
-        # 종합 점수 계산 (네이버 데이터 고려)
+        # Enhanced scoring with data quality consideration
         score = 0
         factors = []
         
-        if is_naver_data:
-            metrics = ratios.get('financial_metrics', {})
-            roe_val = metrics.get('roe', 0)
-        else:
-            roe_val = ratios.get('roe', 0)
-        
+        # ROE scoring
+        roe_val = metrics.get('roe', 0) if metrics.get('roe') != 'N/A' else 0
         if roe_val > 15:
             score += 2
             factors.append("높은 ROE")
         elif roe_val > 10:
             score += 1
             factors.append("양호한 ROE")
-            
+
+        # Earnings momentum
         if earnings.get('fundamental_momentum', False):
             score += 2
             factors.append("실적 개선 추세")
             
-        if not is_naver_data and ratios.get('asset_growth', 0) > 5:
+        # Asset growth
+        asset_growth = metrics.get('asset_growth', 0) if metrics.get('asset_growth') != 'N/A' else 0
+        if asset_growth > 5:
             score += 1
             factors.append("자산 성장")
-            
+        
+        # Interest rate sensitivity
         if interest.get('interest_impact_score', 5) < 6:
             score += 1
             factors.append("낮은 금리 민감도")
         
-        # 네이버 데이터 추가 점수
-        if is_naver_data:
-            metrics = ratios.get('financial_metrics', {})
-            if metrics.get('current_ratio', 0) > 150:  # 유동비율 150% 이상
-                score += 1
-                factors.append("양호한 유동성")
-            if metrics.get('debt_ratio', 100) < 30:  # 부채비율 30% 미만
-                score += 1
-                factors.append("낮은 부채비율")
+        # Liquidity and debt ratios (if available)
+        if current_ratio > 150:
+            score += 1
+            factors.append("양호한 유동성")
+        if debt_ratio < 30 and debt_ratio > 0:
+            score += 1
+            factors.append("낮은 부채비율")
         
-        if score >= 5:
+        # Data quality bonus
+        if data_quality >= 80:
+            score += 1
+            factors.append("높은 데이터 품질")
+
+        max_score = 8
+        if score >= 6:
             grade = "매우 우수"
-        elif score >= 3:
+        elif score >= 4:
             grade = "우수" 
         elif score >= 2:
             grade = "보통"
         else:
             grade = "주의 필요"
             
-        max_score = 8 if is_naver_data else 6
         report += f"""
 펀더멘털 종합 점수: {score}/{max_score} ({grade})
 주요 강점: {', '.join(factors) if factors else '특별한 강점 없음'}
 
-※ 이 분석은 {'네이버 금융 및 공개된' if is_naver_data else '공개된'} 재무 데이터를 바탕으로 한 것이며, 투자 결정 시 추가적인 분석이 필요합니다.
+※ 이 분석은 {source_display} 등 다중 데이터 소스를 바탕으로 한 것이며, 투자 결정 시 추가적인 분석이 필요합니다.
         """
         
         return report

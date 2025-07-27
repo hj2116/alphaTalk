@@ -23,10 +23,28 @@ Present the data in a clear, list-based format. Provide your opinion on the stoc
 
 FUNDAMENTAL_PROMPT = """
 You are a specialized fundamental analyst AI.
-Your sole task is to provide a qualitative analysis of a given stock ticker.
-Focus on the company's business model, competitive advantages, industry trends, and risks.
-Present your analysis in a few concise paragraphs. Do not include quantitative data or a final investment opinion.
-Provide your opinion on the stock and give an appropritate price valuation. 
+You will receive comprehensive fundamental data for a stock ticker in a structured format.
+Your task is to provide a qualitative analysis based on this data.
+
+Focus on:
+1. Business model strength and competitive positioning based on the financial metrics
+2. Industry trends and sector analysis using the provided industry information
+3. Financial health assessment using profitability and debt ratios
+4. Growth prospects based on revenue trends and asset growth
+5. Valuation assessment using PER/PBR in industry context
+6. Risk factors including interest rate sensitivity and leverage
+7. Investment quality assessment based on ROE, ROA, and momentum indicators
+
+Present your analysis in clear, structured paragraphs. Include specific insights about:
+- Company's competitive advantages or weaknesses revealed by the metrics
+- Industry positioning relative to sector norms
+- Financial strength or concerns
+- Growth trajectory and sustainability
+- Key risks and opportunities
+
+Do NOT repeat the raw numbers - focus on interpreting what they mean for the business.
+Provide actionable insights for investment decision-making.
+Write in a professional, analytical tone suitable for investment research.
 """
 
 NEWS_PROMPT = """
@@ -173,11 +191,85 @@ def run_fundamental_analysis(ticker):
         # 종합 펀더멘털 분석 수행
         analysis_result = analyzer.comprehensive_fundamental_analysis(ticker)
         
-        # 보고서 포맷팅
-        formatted_report = analyzer.format_fundamental_report(analysis_result)
+        # Extract clean data for LLM analysis
+        ratios = analysis_result.get('financial_ratios', {})
+        earnings = analysis_result.get('earnings_analysis', {})
+        interest = analysis_result.get('interest_rate_analysis', {})
+        calendar = analysis_result.get('earnings_calendar', {})
+        
+        # Handle both multi-source and legacy data structures
+        if ratios.get('source') == 'multi-source':
+            # New multi-source structure
+            metrics = ratios.get('financial_metrics', {})
+            data_sources = ratios.get('data_sources_used', [])
+            data_quality = ratios.get('data_quality_score', 0)
+            missing_metrics = ratios.get('missing_metrics', [])
+        else:
+            # Legacy structure handling
+            if ratios.get('source') == 'naver_finance':
+                metrics = ratios.get('financial_metrics', {})
+                data_sources = ['naver_finance']
+                data_quality = 85
+            else:
+                metrics = ratios
+                data_sources = ['yfinance']
+                data_quality = 75
+            missing_metrics = []
+        
+        # Create clean, structured data for LLM analysis
+        clean_fundamental_data = f"""
+=== {ticker} 실시간 펀더멘털 분석 데이터 ===
+
+## 회사 기본 정보
+- 티커: {ticker}
+- 데이터 출처: {', '.join(data_sources)}
+- 데이터 품질: {data_quality:.1f}%
+
+## 핵심 재무지표 (최신 연간 기준)
+- 매출액: {analyzer.format_currency(metrics.get('revenue', 0))}
+- 순이익: {analyzer.format_currency(metrics.get('net_income', 0))}
+- 총자산: {analyzer.format_currency(metrics.get('total_assets', 0))}
+- 자기자본: {analyzer.format_currency(metrics.get('shareholders_equity', 0))}
+- 시가총액: {analyzer.format_currency(metrics.get('market_cap', 0))}
+
+## 수익성 지표
+- ROA (총자산이익률): {metrics.get('roa', 'N/A')}%
+- ROE (자기자본이익률): {metrics.get('roe', 'N/A')}%
+- 매출총이익률: {metrics.get('gross_margin', 'N/A')}%
+- 자산성장률: {metrics.get('asset_growth', 'N/A')}%
+
+## 밸류에이션 지표
+- PER (주가수익비율): {metrics.get('pe_ratio', 'N/A')}
+- PBR (주가순자산비율): {metrics.get('pb_ratio', 'N/A')}
+
+## 재무 건전성
+- 부채비율: {metrics.get('debt_ratio', 'N/A')}%
+- 유동비율: {metrics.get('current_ratio', 'N/A')}%
+
+## 실적 모멘텀
+- 펀더멘털 모멘텀: {earnings.get('momentum_description', 'N/A')}
+- 최근 분기 실적 개선 여부: {"예" if earnings.get('fundamental_momentum', False) else "아니오"}
+
+## 금리 민감도 분석
+- 부채자본비율: {interest.get('debt_to_equity', 'N/A')}%
+- 업종: {interest.get('sector', 'N/A')}
+- 금리 영향도 점수: {interest.get('interest_impact_score', 'N/A')}/10
+- 금리 민감도: {interest.get('analysis', 'N/A')}
+
+## 실적 일정
+- 다음 실적발표일: {calendar.get('next_earnings_date', 'N/A')}
+
+## 데이터 품질 정보
+- 수집 성공한 핵심 지표 수: {len([m for m in ['revenue', 'net_income', 'market_cap', 'pe_ratio', 'pb_ratio', 'roe', 'roa'] if m in metrics and metrics[m] not in [None, 0, 'N/A']])}/7개
+- 누락된 지표: {', '.join(missing_metrics) if missing_metrics else '없음'}
+
+위 데이터를 바탕으로 {ticker}의 펀더멘털 분석을 수행해주세요. 
+회사의 비즈니스 모델, 경쟁 우위, 업계 동향 및 리스크를 중심으로 분석하되, 
+정량적 데이터는 이미 제공되었으므로 정성적 분석에 집중해주세요.
+"""
         
         print("펀더멘털 분석 완료")
-        return formatted_report
+        return clean_fundamental_data
         
     except Exception as e:
         error_msg = f"펀더멘털 분석 중 오류 발생: {str(e)}"
