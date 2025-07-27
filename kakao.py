@@ -676,10 +676,7 @@ async def process_ticker_analysis_callback(ticker: str, user_id: str, callback_u
         
         if final_analysis and final_analysis.get('final') and final_analysis['final'].strip():
             # Analysis completed successfully
-            if added:
-                status_message = f"{ticker}를 관심 종목에 추가하고 분석을 완료했어요!\n\n 최신 AI 분석 결과:\n\n{final_analysis['final']}"
-            else:
-                status_message = f"{ticker} 최신 AI 분석 결과:\n\n{final_analysis['final']}"
+            status_message = f"{final_analysis['final']}"
             
             callback_response = {
                 "version": "2.0",
