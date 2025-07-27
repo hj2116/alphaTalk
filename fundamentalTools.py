@@ -151,7 +151,7 @@ class FundamentalAnalyzer:
             return None
     
     def analyze_naver_financial_ratios(self, ticker):
-        """네이버 금융 데이터를 활용한 재무비율 분석"""
+        """네이버 금융 데이터를 활용한 재무비율 분석 (개선된 파싱)"""
         try:
             code = self.extract_korean_code(ticker)
             
@@ -168,61 +168,137 @@ class FundamentalAnalyzer:
             
             financial_metrics = {}
             
+            print(f"📊 파싱 시작 - 총 {len(annual_data.index)}개 지표 확인")
+            
+            # 매출액 추출
             revenue_keys = ['매출액', '수익(매출액)', '매출']
             for key in revenue_keys:
                 if key in annual_data.index:
                     financial_metrics['revenue'] = self.parse_financial_value(annual_data.loc[key].iloc[0])
+                    print(f"✅ 매출액 추출: {self.format_currency(financial_metrics['revenue'])}")
                     break
             
+            # 영업이익 추출
             operating_income_keys = ['영업이익', '영업손익']
             for key in operating_income_keys:
                 if key in annual_data.index:
                     financial_metrics['operating_income'] = self.parse_financial_value(annual_data.loc[key].iloc[0])
+                    print(f"✅ 영업이익 추출: {self.format_currency(financial_metrics['operating_income'])}")
                     break
             
+            # 순이익 추출
             net_income_keys = ['당기순이익', '순이익', '당기순손익']
             for key in net_income_keys:
                 if key in annual_data.index:
                     financial_metrics['net_income'] = self.parse_financial_value(annual_data.loc[key].iloc[0])
+                    print(f"✅ 순이익 추출: {self.format_currency(financial_metrics['net_income'])}")
                     break
             
-            if 'ROE' in annual_data.index:
-                financial_metrics['roe'] = self.parse_percentage(annual_data.loc['ROE'].iloc[0])
-            if 'ROA' in annual_data.index:
-                financial_metrics['roa'] = self.parse_percentage(annual_data.loc['ROA'].iloc[0])
+            # ROE 추출 (개선된 필드명 매칭)
+            roe_keys = ['ROE(지배주주)', 'ROE', 'ROE(%)', '자기자본이익률']
+            for key in roe_keys:
+                if key in annual_data.index:
+                    roe_value = annual_data.loc[key].iloc[0]
+                    if pd.notna(roe_value) and str(roe_value).strip() != '':
+                        financial_metrics['roe'] = self.parse_percentage(roe_value)
+                        print(f"✅ ROE 추출: {financial_metrics['roe']}% (from {key})")
+                        break
             
-            if '부채비율' in annual_data.index:
-                financial_metrics['debt_ratio'] = self.parse_percentage(annual_data.loc['부채비율'].iloc[0])
+            # ROA 계산 (순이익과 총자산이 있으면)
+            if 'net_income' in financial_metrics:
+                # 간접 계산 시도
+                if '총자산' in annual_data.index:
+                    total_assets = self.parse_financial_value(annual_data.loc['총자산'].iloc[0])
+                    if total_assets > 0:
+                        financial_metrics['roa'] = round((financial_metrics['net_income'] / total_assets) * 100, 2)
+                        print(f"✅ ROA 계산: {financial_metrics['roa']}%")
             
-            if '유동비율' in annual_data.index:
-                financial_metrics['current_ratio'] = self.parse_percentage(annual_data.loc['유동비율'].iloc[0])
+            # PER 추출 (개선된 필드명 매칭)
+            per_keys = ['PER(배)', 'PER', 'PER(%)', '주가수익비율']
+            for key in per_keys:
+                if key in annual_data.index:
+                    per_value = annual_data.loc[key].iloc[0]
+                    if pd.notna(per_value) and str(per_value).strip() != '':
+                        # PER은 배수이므로 그대로 사용
+                        financial_metrics['pe_ratio'] = float(str(per_value).replace('배', '').replace('%', '').strip())
+                        print(f"✅ PER 추출: {financial_metrics['pe_ratio']}배 (from {key})")
+                        break
             
+            # PBR 추출 (개선된 필드명 매칭)
+            pbr_keys = ['PBR(배)', 'PBR', 'PBR(%)', '주가순자산비율']
+            for key in pbr_keys:
+                if key in annual_data.index:
+                    pbr_value = annual_data.loc[key].iloc[0]
+                    if pd.notna(pbr_value) and str(pbr_value).strip() != '':
+                        # PBR은 배수이므로 그대로 사용
+                        financial_metrics['pb_ratio'] = float(str(pbr_value).replace('배', '').replace('%', '').strip())
+                        print(f"✅ PBR 추출: {financial_metrics['pb_ratio']}배 (from {key})")
+                        break
+            
+            # 부채비율 추출
+            debt_keys = ['부채비율', '부채비율(%)']
+            for key in debt_keys:
+                if key in annual_data.index:
+                    debt_value = annual_data.loc[key].iloc[0]
+                    if pd.notna(debt_value) and str(debt_value).strip() != '':
+                        financial_metrics['debt_ratio'] = self.parse_percentage(debt_value)
+                        print(f"✅ 부채비율 추출: {financial_metrics['debt_ratio']}%")
+                        break
+            
+            # 유동비율/당좌비율 추출
+            liquidity_keys = ['유동비율', '당좌비율', '유동성비율']
+            for key in liquidity_keys:
+                if key in annual_data.index:
+                    liquidity_value = annual_data.loc[key].iloc[0]
+                    if pd.notna(liquidity_value) and str(liquidity_value).strip() != '':
+                        financial_metrics['current_ratio'] = self.parse_percentage(liquidity_value)
+                        print(f"✅ 유동비율 추출: {financial_metrics['current_ratio']}%")
+                        break
+            
+            # yfinance에서 시가총액 보완 시도
             try:
                 stock = yf.Ticker(ticker)
                 info = stock.info
-                financial_metrics['pe_ratio'] = info.get('trailingPE', 0)
-                financial_metrics['pb_ratio'] = info.get('priceToBook', 0)
-                financial_metrics['market_cap'] = info.get('marketCap', 0)
+                if 'marketCap' in info and info['marketCap']:
+                    financial_metrics['market_cap'] = info['marketCap']
+                    print(f"✅ 시가총액 보완 (yfinance): {self.format_currency(financial_metrics['market_cap'])}")
             except:
                 pass
+            
+            # 업종 비교 데이터 처리
             industry_comparison = {}
             if industry_df is not None:
                 try:
-                    for idx in industry_df.index:
-                        if len(industry_df.columns) >= 2:
-                            industry_comparison[idx] = {
-                                'company': industry_df.iloc[industry_df.index.get_loc(idx), 0],
-                                'industry_avg': industry_df.iloc[industry_df.index.get_loc(idx), 1] if len(industry_df.columns) > 1 else 'N/A'
-                            }
+                    print(f"📊 업종 비교 데이터 처리: {industry_df.shape}")
+                    # 업종 비교에서 추가 메트릭 추출
+                    if 'ROE(%)' in industry_df.index and len(industry_df.columns) > 0:
+                        company_roe = industry_df.loc['ROE(%)', industry_df.columns[0]]
+                        industry_comparison['ROE'] = {
+                            'company': str(company_roe),
+                            'industry_avg': 'N/A'  # 업종 평균 계산 필요 시 추가
+                        }
+                    
+                    if 'PER(%)' in industry_df.index and len(industry_df.columns) > 0:
+                        company_per = industry_df.loc['PER(%)', industry_df.columns[0]]
+                        industry_comparison['PER'] = {
+                            'company': str(company_per),
+                            'industry_avg': 'N/A'
+                        }
+                        
                 except Exception as e:
                     print(f"업종 비교 데이터 처리 오류: {e}")
+            
+            print(f"🎯 최종 추출된 메트릭 수: {len(financial_metrics)}개")
+            for key, value in financial_metrics.items():
+                print(f"  - {key}: {value}")
             
             return {
                 "source": "naver_finance",
                 "financial_metrics": financial_metrics,
                 "industry_comparison": industry_comparison,
                 "quarter_data_available": quarter_data is not None,
-                "annual_data_available": annual_data is not None
+                "annual_data_available": annual_data is not None,
+                "data_richness": len(financial_metrics)
             }
             
         except Exception as e:
